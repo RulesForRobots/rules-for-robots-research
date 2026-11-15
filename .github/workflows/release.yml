@@ -1,0 +1,59 @@
+# Releases one plugin: tags <plugin>--v<version> (the form dependency ranges resolve against) and
+# publishes a GitHub release whose notes are that version's section of the plugin's CHANGELOG.md.
+# A release is the maintainer's decision, so this runs only by hand (Actions, Release, Run workflow).
+# Leave "dry run" ticked to see the tag and notes without publishing anything.
+# Rules for Robots Core is the source of this file; each domain repository keeps an identical copy.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin folder under plugins/, for example rfr-core
+        required: true
+        type: string
+      dry-run:
+        description: Dry run (show the tag and notes, publish nothing)
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Plugin tests
+        env:
+          PLUGIN: ${{ inputs.plugin }}
+        run: node .github/scripts/plugins.mjs test "$PLUGIN"
+      - id: prepare
+        env:
+          PLUGIN: ${{ inputs.plugin }}
+        run: node .github/scripts/release.mjs "$PLUGIN" --notes "$RUNNER_TEMP/notes.md" --github-output
+      - name: Tag and publish
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"

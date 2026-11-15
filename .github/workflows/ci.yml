@@ -1,0 +1,82 @@
+# Tests only the plugins a change touches (.github/scripts/plugins.mjs plan). A change to the CI
+# scripts or this file tests every plugin. "verify" is the one check for branch protection to require:
+# it reports on every pull request, whether or not any plugin ran.
+# Rules for Robots Core is the source of this file; each domain repository keeps an identical copy.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.plan.outputs.plugins }}
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: CI script tests
+        run: node --test .github/scripts/test/*.test.mjs
+      - id: plan
+        env:
+          # A pull request compares with its base; a push with the commit before it. A run by hand,
+          # or the first push, has no base, and tests every plugin.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node .github/scripts/plugins.mjs plan --github-output
+
+  plugin:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.plan.outputs.plugins) }}
+        # Windows because the maintainer's machine is Windows, and hooks run there.
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.plugin }} (${{ matrix.os }})
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Structure and self-containment
+        run: node .github/scripts/plugins.mjs check ${{ matrix.plugin }}
+      - name: Tests
+        run: node .github/scripts/plugins.mjs test ${{ matrix.plugin }}
+      # Validation needs the Claude Code CLI; no API key is used.
+      - name: claude plugin validate
+        if: runner.os == 'Linux'
+        run: |
+          npm install --global @anthropic-ai/claude-code@^2.1.288
+          claude plugin validate --strict plugins/${{ matrix.plugin }}
+
+  verify:
+    needs: [plan, plugin]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Result
+        env:
+          PLAN: ${{ needs.plan.result }}
+          PLUGIN: ${{ needs.plugin.result }}
+        run: |
+          echo "plan: $PLAN, plugins: $PLUGIN"
+          [ "$PLAN" = success ] && { [ "$PLUGIN" = success ] || [ "$PLUGIN" = skipped ]; }
