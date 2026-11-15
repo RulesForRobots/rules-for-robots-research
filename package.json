@@ -1,0 +1,13 @@
+{
+  "name": "rules-for-robots-research",
+  "private": true,
+  "type": "module",
+  "description": "Finding things out with agents.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "verify": "node .github/scripts/verify.mjs"
+  }
+}
